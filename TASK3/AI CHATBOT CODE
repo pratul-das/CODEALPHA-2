@@ -1,0 +1,255 @@
+import javax.swing.*;
+import javax.swing.border.EmptyBorder;
+import java.awt.*;
+import java.awt.event.*;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.*;
+import java.util.List;
+
+/**
+ * ChatbotGUI.java
+ * Single-file Java Swing Chatbot with rule-based + simple NLP (cosine similarity over bag-of-words)
+ * No external dependencies. Compile: javac ChatbotGUI.java  Run: java ChatbotGUI
+ */
+public class ChatbotGUI {
+
+    private JFrame frame;
+    private JTextArea chatArea;
+    private JTextField inputField;
+    private JButton sendBtn;
+
+    // Rule-based quick replies
+    private final Map<String, String> rules = new HashMap<>();
+
+    // FAQ training data (Q -> A)
+    private final List<String> faqQ = new ArrayList<>();
+    private final List<String> faqA = new ArrayList<>();
+
+    // Vocabulary for bag-of-words
+    private final Map<String, Integer> vocabIndex = new HashMap<>();
+
+    // Precomputed FAQ vectors
+    private double[][] faqVectors;
+
+    // Stopwords (minimal, extendable)
+    private final Set<String> stop = new HashSet<>(Arrays.asList(
+            "a","an","the","i","you","we","they","he","she","it","is","are","am","was","were",
+            "to","of","in","on","for","and","or","as","at","by","with","from","that","this",
+            "be","been","being","do","does","did","have","has","had","will","would","can","could",
+            "should","shall","may","might","about","what","which","who","whom","whose","how","when",
+            "where","why","me","my","your","yours","our","ours","their","theirs"
+    ));
+
+    // Similarity threshold for accepting FAQ match
+    private final double SIM_THRESHOLD = 0.18;
+
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(() -> new ChatbotGUI().start());
+    }
+
+    private void start() {
+        initRules();
+        initFAQ();
+        buildVocabAndVectors();
+        initGUI();
+        botSay("Hello. I am JavaBot. Ask me anything or type 'help' for examples.");
+    }
+
+    private void initGUI() {
+        frame = new JFrame("AI Chatbot - Java");
+        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        frame.setSize(720, 520);
+        frame.setLocationRelativeTo(null);
+
+        JPanel root = new JPanel(new BorderLayout(10, 10));
+        root.setBorder(new EmptyBorder(12,12,12,12));
+
+        chatArea = new JTextArea();
+        chatArea.setEditable(false);
+        chatArea.setLineWrap(true);
+        chatArea.setWrapStyleWord(true);
+        chatArea.setFont(new Font("Monospaced", Font.PLAIN, 14));
+        JScrollPane scroll = new JScrollPane(chatArea);
+        root.add(scroll, BorderLayout.CENTER);
+
+        JPanel inputBar = new JPanel(new BorderLayout(8, 8));
+        inputField = new JTextField();
+        inputField.setFont(new Font("SansSerif", Font.PLAIN, 14));
+        sendBtn = new JButton("Send");
+        sendBtn.setFont(new Font("SansSerif", Font.BOLD, 14));
+        inputBar.add(inputField, BorderLayout.CENTER);
+        inputBar.add(sendBtn, BorderLayout.EAST);
+
+        JLabel hint = new JLabel("Try: hello | fees details | java course | placement | time | date | bye");
+        hint.setFont(new Font("SansSerif", Font.ITALIC, 12));
+        hint.setForeground(new Color(0,0,0,160));
+        root.add(hint, BorderLayout.NORTH);
+        root.add(inputBar, BorderLayout.SOUTH);
+
+        frame.setContentPane(root);
+        frame.setVisible(true);
+
+        sendBtn.addActionListener(e -> handleUserMessage());
+        inputField.addActionListener(e -> handleUserMessage());
+    }
+
+    private void handleUserMessage() {
+        String user = inputField.getText().trim();
+        if (user.isEmpty()) return;
+        userSay(user);
+        inputField.setText("");
+
+        String reply = generateReply(user);
+        botSay(reply);
+    }
+
+    private void userSay(String text) {
+        appendChat("You", text);
+    }
+
+    private void botSay(String text) {
+        appendChat("Bot", text);
+    }
+    private void appendChat(String who, String text) {
+        String time = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm"));
+        chatArea.append(who + " [" + time + "]: " + text + "\n");
+        chatArea.setCaretPosition(chatArea.getDocument().getLength());
+    }
+
+    private void initRules() {
+        rules.put("hello", "Hi there. How can I help you?");
+        rules.put("hi", "Hello. What can I do for you?");
+        rules.put("hey", "Hello.");
+        rules.put("thanks", "You are welcome.");
+        rules.put("thank you", "You are welcome.");
+        rules.put("bye", "Goodbye. Have a nice day.");
+        rules.put("help",
+                "I can answer FAQs like fees, admission, courses (Java/Python), placement, timings, contact.\n" +
+                "Try: 'fees details', 'how to apply', 'java course', 'class timings', 'contact number'");
+        rules.put("time", "Current time: " + LocalDateTime.now().format(DateTimeFormatter.ofPattern("hh:mm a")));
+        rules.put("date", "Today is: " + LocalDateTime.now().format(DateTimeFormatter.ofPattern("EEEE, dd MMM yyyy")));
+    }
+
+    private void initFAQ() {
+        addFAQ("how to apply for admission",
+               "Admission: Fill the online application form, upload documents, and pay the registration fee.");
+        addFAQ("what are the fees details",
+               "Fees: Tuition Rs.45,000 per semester. Scholarships available based on merit.");
+        addFAQ("do you offer java course",
+               "Yes. Java course covers OOP, Collections, JDBC, Servlets, Spring basics and projects.");
+        addFAQ("is there a python course",
+               "Yes. Python course includes basics to OOP, pandas, matplotlib and a mini data project.");
+        addFAQ("what is placement support",
+               "Placement: Resume workshops, mock interviews, referrals and campus drives with partner companies.");
+        addFAQ("what are class timings",
+               "Timings: Weekdays 10:00-17:00; Weekend batches 10:00-14:00.");
+        addFAQ("what is the contact number",
+               "Contact: +91-90000-11111 or email: info@example.edu");
+        addFAQ("where is the campus located",
+               "Campus: Sector 5, Salt Lake, Kolkata. Nearest metro: Central Park.");
+        addFAQ("is there hostel facility",
+               "Yes. Separate hostel for boys and girls, limited seats, first-come-first-served.");
+        addFAQ("what documents are required for admission",
+               "Docs: Photo ID, mark sheets, transfer certificate, passport photo and address proof.");
+    }
+
+    private void addFAQ(String q, String a) {
+        faqQ.add(q);
+        faqA.add(a);
+    }
+
+    private void buildVocabAndVectors() {
+        int idx = 0;
+        for (String q : faqQ) {
+            for (String tok : tokenize(q)) {
+                if (!vocabIndex.containsKey(tok)) {
+                    vocabIndex.put(tok, idx++);
+                }
+            }
+        }
+        faqVectors = new double[faqQ.size()][vocabIndex.size()];
+        for (int i = 0; i < faqQ.size(); i++) {
+            double[] v = vectorize(tokenize(faqQ.get(i)));
+            faqVectors[i] = normalize(v);
+        }
+    }
+
+    private String generateReply(String userRaw) {
+        String user = userRaw.trim().toLowerCase();
+
+        // 1) Exact/simple rule hits
+        for (String k : rules.keySet()) {
+            if (equalsIgnorePunct(user, k) || user.contains(k)) {
+                return rules.get(k);
+            }
+        }
+
+        // 2) NLP similarity vs FAQ
+        List<String> tokens = tokenize(user);
+        if (tokens.isEmpty()) {
+            return "Could you please rephrase?";
+        }
+        double[] userVec = normalize(vectorize(tokens));
+
+        int bestIdx = -1;
+        double bestSim = -1.0;
+        for (int i = 0; i < faqVectors.length; i++) {
+            double sim = cosine(userVec, faqVectors[i]);
+            if (sim > bestSim) {
+                bestSim = sim;
+                bestIdx = i;
+            }
+        }
+        if (bestIdx >= 0 && bestSim >= SIM_THRESHOLD) {
+            return faqA.get(bestIdx);
+        }
+
+        // 3) Fallback
+        return "I am not sure about that. Try 'help' or ask about fees, admission, java/python, placement, timings.";
+    }
+
+    private boolean equalsIgnorePunct(String a, String b) {
+        return stripPunct(a).equals(stripPunct(b));
+    }
+
+    private String stripPunct(String s) {
+        return s.replaceAll("[^a-z0-9 ]", "").trim();
+    }
+
+    private List<String> tokenize(String text) {
+        String clean = stripPunct(text.toLowerCase());
+        String[] raw = clean.split("\\s+");
+        List<String> out = new ArrayList<>();
+        for (String w : raw) {
+            if (w.isEmpty()) continue;
+            if (stop.contains(w)) continue;
+            out.add(w);
+        }
+        return out;
+    }
+
+    private double[] vectorize(List<String> tokens) {
+        double[] v = new double[vocabIndex.size()];
+        for (String t : tokens) {
+            Integer i = vocabIndex.get(t);
+            if (i != null) v[i] += 1.0;
+        }
+        return v;
+    }
+
+    private double[] normalize(double[] v) {
+        double norm = 0.0;
+        for (double x : v) norm += x * x;
+        norm = Math.sqrt(Math.max(norm, 1e-12));
+        double[] out = new double[v.length];
+        for (int i = 0; i < v.length; i++) out[i] = v[i] / norm;
+        return out;
+    }
+
+    private double cosine(double[] a, double[] b) {
+        double dot = 0.0;
+        for (int i = 0; i < a.length; i++) dot += a[i] * b[i];
+        return dot;
+    }
+}
